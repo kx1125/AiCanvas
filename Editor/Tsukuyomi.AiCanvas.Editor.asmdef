@@ -1,0 +1,10 @@
+{
+  "name": "Tsukuyomi.AiCanvas.Editor",
+  "rootNamespace": "Tsukuyomi.AiCanvas.Editor",
+  "references": ["Unity.RenderPipelines.Universal.Runtime", "Unity.RenderPipelines.Core.Runtime"],
+  "overrideReferences": true,
+  "precompiledReferences": ["Newtonsoft.Json.dll"],
+  "includePlatforms": ["Editor"],
+  "allowUnsafeCode": false,
+  "autoReferenced": true
+}

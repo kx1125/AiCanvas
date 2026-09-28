@@ -1,0 +1,31 @@
+# Unity metadata belongs in source control; local IDE and OS files do not.
+.vs/
+.idea/
+*.csproj
+*.sln
+*.user
+.DS_Store
+Thumbs.db
+
+# Local validation tests, matching the TsukuyomiRP release layout.
+/Tests/
+/Tests.meta
+
+# Unity and local build output.
+/Library/
+/Temp/
+/Logs/
+/UserSettings/
+/Build/
+/Builds/
+/artifacts/
+bin/
+obj/
+*.pdb
+*.unitypackage
+
+# Never commit credentials or local request payloads.
+.env
+.env.*
+!.env.example
+*.local.json

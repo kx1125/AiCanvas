@@ -1,0 +1,208 @@
+#pragma kernel GradientMapImage
+#pragma kernel HistogramRangeImage
+#pragma kernel HistogramSelectImage
+#pragma kernel RgbaMergeImage
+#pragma kernel RgbaSplitImage
+#pragma kernel RgbaSplitAll
+#pragma kernel ChannelShuffleImage
+#pragma kernel GradientLinearImage
+#pragma kernel ShapeImage
+#pragma kernel TileableNoiseImage
+#pragma kernel TileGeneratorImage
+
+#include "ImageFilterCommon.hlsl"
+
+Texture2D<float4> _Input, _Second, _Red, _Green, _Blue, _Alpha;
+RWTexture2D<float4> _Output;
+RWTexture2D<float4> _SplitR, _SplitG, _SplitB, _SplitA;
+int _Width, _Height;
+int _SplitChannel;
+float4 _Histogram, _Channels;
+int _Direction, _Cycles, _Mirror, _Invert, _Shape, _Seed, _NoiseScale, _Octaves;
+float _Phase, _Feather, _Roughness, _RowOffset, _TileRotation, _RotationRandom, _SizeRandom, _Jitter, _ValueRandom, _Missing;
+float4 _PatternSize, _Offset, _TileCount;
+
+#include "ImageGradientMapping.hlsl"
+
+[numthreads(8, 8, 1)]
+void HistogramRangeImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float value = saturate((saturate(_Input.Load(int3(id.xy, 0)).r) - 0.5) * _Histogram.y + _Histogram.x);
+    _Output[id.xy] = float4(value.xxx, 1);
+}
+
+[numthreads(8, 8, 1)]
+void HistogramSelectImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float distance = abs(saturate(_Input.Load(int3(id.xy, 0)).r) - _Histogram.x);
+    float halfRange = _Histogram.y * 0.5;
+    float feather = halfRange * (1 - _Histogram.z);
+    float value = _Histogram.z >= 1 ? step(distance, halfRange) : saturate((halfRange - distance) / max(feather, 1e-7));
+    if (_Histogram.y <= 0) value = 0;
+    if (_Histogram.w != 0) value = 1 - value;
+    _Output[id.xy] = float4(value.xxx, 1);
+}
+
+[numthreads(8, 8, 1)]
+void RgbaMergeImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(_Width, _Height);
+    // Raw channels: no premultiplication or color transfer functions during packing.
+    _Output[id.xy] = float4(_Red.Load(int3(id.xy, 0)).r, ReadBilinear(_Green, uv, false).r,
+        ReadBilinear(_Blue, uv, false).r, ReadBilinear(_Alpha, uv, false).r);
+}
+
+[numthreads(8, 8, 1)]
+void RgbaSplitImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float value = _Input.Load(int3(id.xy, 0))[_SplitChannel];
+    _Output[id.xy] = float4(value.xxx, 1);
+}
+
+[numthreads(8, 8, 1)]
+void RgbaSplitAll(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float4 value = _Input.Load(int3(id.xy, 0));
+    _SplitR[id.xy] = float4(value.rrr, 1);
+    _SplitG[id.xy] = float4(value.ggg, 1);
+    _SplitB[id.xy] = float4(value.bbb, 1);
+    _SplitA[id.xy] = float4(value.aaa, 1);
+}
+
+float PickChannel(float4 a, float4 b, int channel)
+{
+    if (channel < 4) return a[channel];
+    if (channel < 8) return b[channel - 4];
+    return channel == 9 ? 1 : 0;
+}
+
+[numthreads(8, 8, 1)]
+void ChannelShuffleImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(_Width, _Height);
+    float4 a = _Input.Load(int3(id.xy, 0));
+    float4 b = ReadBilinear(_Second, uv, false);
+    _Output[id.xy] = float4(PickChannel(a, b, (int)_Channels.x), PickChannel(a, b, (int)_Channels.y),
+        PickChannel(a, b, (int)_Channels.z), PickChannel(a, b, (int)_Channels.w));
+}
+
+[numthreads(8, 8, 1)]
+void GradientLinearImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(_Width, _Height);
+    float value = frac((_Direction == 0 ? uv.x : uv.y) * _Cycles + _Phase);
+    if (_Mirror != 0) value = 1 - abs(value * 2 - 1);
+    if (_Invert != 0) value = 1 - value;
+    _Output[id.xy] = float4(value.xxx, 1);
+}
+
+float PatternMask(float2 coordinate, float2 size, float2 pixelSize)
+{
+    float2 p = abs(coordinate * 2 / size);
+    float distance = _Shape == 0 ? length(p) : _Shape == 1 ? max(p.x, p.y) : p.x + p.y;
+    // Filter inward so a pattern never extends beyond its geometric bounds. This also
+    // keeps the tile neighborhood finite at tiny output sizes and high tile counts.
+    float aa = min(1.0, 2 * max(pixelSize.x / size.x, pixelSize.y / size.y));
+    return 1 - smoothstep(1 - max(_Feather, aa), 1, distance);
+}
+
+[numthreads(8, 8, 1)]
+void ShapeImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 size = float2(_Width, _Height);
+    float value = PatternMask((float2(id.xy) + 0.5) / size - 0.5, _PatternSize.xy, 1 / size);
+    _Output[id.xy] = float4(value.xxx, 1);
+}
+
+uint MixBits(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
+}
+
+float CellRandom(int2 cell, uint seed, uint stream)
+{
+    uint bits = MixBits((uint)cell.x * 0x9e3779b9u ^ (uint)cell.y * 0x85ebca6bu ^ seed ^ stream * 0xc2b2ae35u);
+    return (bits & 0x00ffffffu) / 16777216.0;
+}
+
+int2 WrapCell(int2 cell, int2 period) { return (cell % period + period) % period; }
+
+float PeriodicValueNoise(float2 uv, int period, uint seed)
+{
+    float2 coordinate = uv * period;
+    int2 cell = (int2)floor(coordinate);
+    float2 f = frac(coordinate);
+    float2 blend = f * f * f * (f * (f * 6 - 15) + 10);
+    int2 size = int2(period, period);
+    float a = CellRandom(WrapCell(cell, size), seed, 0);
+    float b = CellRandom(WrapCell(cell + int2(1, 0), size), seed, 0);
+    float c = CellRandom(WrapCell(cell + int2(0, 1), size), seed, 0);
+    float d = CellRandom(WrapCell(cell + int2(1, 1), size), seed, 0);
+    return lerp(lerp(a, b, blend.x), lerp(c, d, blend.x), blend.y);
+}
+
+[numthreads(8, 8, 1)]
+void TileableNoiseImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 uv = frac((float2(id.xy) + 0.5) / float2(_Width, _Height) + _Offset.xy);
+    float value = 0, amplitude = 1, total = 0;
+    [loop] for (int octave = 0; octave < _Octaves; octave++)
+    {
+        value += amplitude * PeriodicValueNoise(uv, _NoiseScale << octave, (uint)_Seed + (uint)octave * 0x9e3779b9u);
+        total += amplitude;
+        amplitude *= _Roughness;
+    }
+    value /= total;
+    _Output[id.xy] = float4(value.xxx, 1);
+}
+
+[numthreads(8, 8, 1)]
+void TileGeneratorImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    if (_Missing >= 1) { _Output[id.xy] = float4(0, 0, 0, 1); return; }
+    float2 uv = frac((float2(id.xy) + 0.5) / float2(_Width, _Height) + _Offset.xy);
+    float2 coordinate = uv * _TileCount.xy;
+    int2 period = (int2)_TileCount.xy;
+    int baseRow = (int)floor(coordinate.y);
+    float value = 0;
+    // Size never exceeds one cell and jitter never exceeds half a cell. A 3x3
+    // neighborhood per staggered row covers all rotated footprints, including seams.
+    [unroll] for (int dy = -1; dy <= 1; dy++)
+    {
+        int row = baseRow + dy;
+        int wrappedRow = (row % period.y + period.y) % period.y;
+        float shift = (wrappedRow % 2) * _RowOffset;
+        int baseColumn = (int)floor(coordinate.x - shift);
+        [unroll] for (int dx = -1; dx <= 1; dx++)
+        {
+            int2 cell = int2(baseColumn + dx, row);
+            int2 wrapped = WrapCell(cell, period);
+            if (CellRandom(wrapped, (uint)_Seed, 1) < _Missing) continue;
+            float2 jitter = (float2(CellRandom(wrapped, (uint)_Seed, 2), CellRandom(wrapped, (uint)_Seed, 3)) * 2 - 1) * _Jitter;
+            float2 local = coordinate - (float2(cell) + 0.5 + float2(shift, 0) + jitter);
+            float angle = _TileRotation + (CellRandom(wrapped, (uint)_Seed, 4) * 2 - 1) * _RotationRandom;
+            float sine, cosine;
+            sincos(angle, sine, cosine);
+            local = float2(cosine * local.x + sine * local.y, -sine * local.x + cosine * local.y);
+            float sizeFactor = lerp(1, lerp(0.1, 1, CellRandom(wrapped, (uint)_Seed, 5)), _SizeRandom);
+            float mask = PatternMask(local, _PatternSize.xy * sizeFactor, _TileCount.xy / float2(_Width, _Height));
+            float brightness = lerp(1, CellRandom(wrapped, (uint)_Seed, 6), _ValueRandom);
+            value = max(value, mask * brightness);
+        }
+    }
+    _Output[id.xy] = float4(value.xxx, 1);
+}

@@ -1,0 +1,81 @@
+#pragma kernel ResizeImage
+#pragma kernel LevelsImage
+#pragma kernel BlendImage
+
+Texture2D<float4> _Input;
+Texture2D<float4> _Background;
+Texture2D<float4> _Foreground;
+Texture2D<float4> _Mask;
+RWTexture2D<float4> _Output;
+int _Width, _Height;
+int _InputIsColor, _BackgroundIsColor, _ForegroundIsColor;
+int _Fit, _Sampling;
+float4 _Levels;
+float _InverseGamma;
+int _AffectAlpha;
+int _BlendMode;
+float _Opacity;
+
+#include "ImageFilterCommon.hlsl"
+
+[numthreads(8, 8, 1)]
+void ResizeImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    uint inputWidth, inputHeight;
+    _Input.GetDimensions(inputWidth, inputHeight);
+    float2 inputSize = float2(inputWidth, inputHeight);
+    float2 outputSize = float2(_Width, _Height);
+    float2 uv = (float2(id.xy) + 0.5) / outputSize;
+    if (_Fit != 0)
+    {
+        float2 ratio = outputSize / inputSize;
+        float scale = _Fit == 1 ? min(ratio.x, ratio.y) : max(ratio.x, ratio.y);
+        float2 contentSize = inputSize * scale;
+        uv = (float2(id.xy) + 0.5 - (outputSize - contentSize) * 0.5) / contentSize;
+        if (any(uv < 0) || any(uv > 1)) { _Output[id.xy] = 0; return; }
+    }
+    if (_Sampling == 0)
+    {
+        int2 pixel = clamp((int2)floor(uv * inputSize), int2(0, 0), int2(inputWidth, inputHeight) - 1);
+        _Output[id.xy] = _Input.Load(int3(pixel, 0));
+    }
+    else _Output[id.xy] = FromWorking(ReadBilinear(_Input, uv, _InputIsColor != 0), _InputIsColor != 0);
+}
+
+[numthreads(8, 8, 1)]
+void LevelsImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float4 original = _Input.Load(int3(id.xy, 0));
+    // Color textures remain linear between nodes. Only this operation's RGB working values change.
+    float4 working = ToWorking(original, _InputIsColor != 0);
+    float4 normalized = saturate((working - _Levels.x) / (_Levels.y - _Levels.x));
+    float4 result = lerp(_Levels.z, _Levels.w, pow(normalized, _InverseGamma));
+    result = FromWorking(result, _InputIsColor != 0);
+    if (_AffectAlpha == 0) result.a = original.a;
+    _Output[id.xy] = result;
+}
+
+[numthreads(8, 8, 1)]
+void BlendImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(_Width, _Height);
+    float4 background = _Background.Load(int3(id.xy, 0));
+    float4 foreground = ReadBilinear(_Foreground, uv, _ForegroundIsColor != 0);
+    float mask = saturate(ReadBilinear(_Mask, uv, false).r);
+    float alpha = saturate(foreground.a) * mask * _Opacity;
+    if (alpha <= 0) { _Output[id.xy] = background; return; }
+    background = ToWorking(background, _BackgroundIsColor != 0);
+    float backgroundAlpha = saturate(background.a);
+    float3 blended = foreground.rgb;
+    if (_BlendMode == 1) blended = background.rgb * foreground.rgb;
+    else if (_BlendMode == 2) blended = 1 - (1 - background.rgb) * (1 - foreground.rgb);
+    else if (_BlendMode == 3) blended = saturate(background.rgb + foreground.rgb);
+    // Blend in the overlap, then source-over composite; the result remains straight-alpha.
+    float outputAlpha = alpha + backgroundAlpha * (1 - alpha);
+    float3 premultiplied = alpha * lerp(foreground.rgb, blended, backgroundAlpha)
+        + (1 - alpha) * backgroundAlpha * background.rgb;
+    _Output[id.xy] = FromWorking(float4(outputAlpha > 1e-6 ? premultiplied / outputAlpha : 0, outputAlpha), _BackgroundIsColor != 0);
+}

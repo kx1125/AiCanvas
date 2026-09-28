@@ -1,0 +1,217 @@
+#pragma kernel UniformImage
+#pragma kernel GrayscaleImage
+#pragma kernel InvertImage
+#pragma kernel HistogramScanImage
+#pragma kernel TransformImage
+#pragma kernel BlurHorizontal
+#pragma kernel BlurVertical
+#pragma kernel BlurHorizontalTiled
+#pragma kernel BlurVerticalTiled
+#pragma kernel DirectionalWarpImage
+#pragma kernel NormalImage
+
+#include "ImageFilterCommon.hlsl"
+
+Texture2D<float4> _Input;
+Texture2D<float4> _IntensityMap;
+RWTexture2D<float4> _Output;
+int _Width, _Height, _InputIsColor;
+int _Channel, _PreserveAlpha, _AffectAlpha, _Invert, _Border, _Sampling, _NormalFormat, _HeightInAlpha;
+float4 _Uniform, _Transform, _Rotation, _Warp;
+float _Position, _Contrast, _Sigma, _Strength;
+
+// Address every tap separately: Repeat interpolates across the seam and Transparent
+// contributes zero outside the canvas, including partially covered bilinear footprints.
+float4 ReadBorder(int2 pixel)
+{
+    uint width, height;
+    _Input.GetDimensions(width, height);
+    int2 size = int2(width, height);
+    if (_Border == 2 && (any(pixel < 0) || any(pixel >= size))) return 0;
+    if (_Border == 1) pixel = (pixel % size + size) % size;
+    else pixel = clamp(pixel, int2(0, 0), size - 1);
+    return _Input.Load(int3(pixel, 0));
+}
+
+float4 SamplingValue(int2 pixel)
+{
+    float4 value = ToWorking(ReadBorder(pixel), _InputIsColor != 0);
+    return _InputIsColor != 0 ? Premultiply(value) : value;
+}
+
+float4 FinishSampling(float4 value)
+{
+    if (_InputIsColor != 0) value.rgb = value.a > 1e-6 ? value.rgb / value.a : 0;
+    return FromWorking(value, _InputIsColor != 0);
+}
+
+float4 SampleInput(float2 position)
+{
+    if (_Sampling == 0) return ReadBorder((int2)floor(position + 0.5));
+    int2 pixel = (int2)floor(position);
+    float2 weight = frac(position);
+    return FinishSampling(lerp(lerp(SamplingValue(pixel), SamplingValue(pixel + int2(1, 0)), weight.x),
+        lerp(SamplingValue(pixel + int2(0, 1)), SamplingValue(pixel + int2(1, 1)), weight.x), weight.y));
+}
+
+[numthreads(8, 8, 1)]
+void UniformImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    _Output[id.xy] = _Uniform;
+}
+
+[numthreads(8, 8, 1)]
+void GrayscaleImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float4 value = ToWorking(_Input.Load(int3(id.xy, 0)), _InputIsColor != 0);
+    float gray = dot(value.rgb, float3(0.2126729, 0.7151522, 0.0721750));
+    if (_Channel == 1) gray = value.r;
+    else if (_Channel == 2) gray = value.g;
+    else if (_Channel == 3) gray = value.b;
+    else if (_Channel == 4) gray = value.a;
+    _Output[id.xy] = float4(gray.xxx, _PreserveAlpha != 0 ? value.a : 1);
+}
+
+[numthreads(8, 8, 1)]
+void InvertImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float4 value = ToWorking(_Input.Load(int3(id.xy, 0)), _InputIsColor != 0);
+    value.rgb = 1 - value.rgb;
+    if (_AffectAlpha != 0) value.a = 1 - value.a;
+    _Output[id.xy] = FromWorking(value, _InputIsColor != 0);
+}
+
+[numthreads(8, 8, 1)]
+void HistogramScanImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float value = saturate(_Input.Load(int3(id.xy, 0)).r);
+    float width = 1 - _Contrast;
+    float threshold = lerp(1 + width * 0.5, -width * 0.5, _Position);
+    float mask = width <= 1e-6 ? step(threshold, value) : saturate((value - threshold) / width + 0.5);
+    if (_Position <= 0) mask = 0;
+    else if (_Position >= 1) mask = 1;
+    if (_Invert != 0) mask = 1 - mask;
+    _Output[id.xy] = float4(mask.xxx, 1);
+}
+
+[numthreads(8, 8, 1)]
+void TransformImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 size = float2(_Width, _Height);
+    float2 centered = float2(id.xy) + 0.5 - size * (0.5 + _Transform.xy);
+    // Inverse map in pixels, so rotation does not stretch non-square images.
+    float2 rotated = float2(_Rotation.x * centered.x + _Rotation.y * centered.y,
+        -_Rotation.y * centered.x + _Rotation.x * centered.y);
+    _Output[id.xy] = SampleInput(rotated * _Transform.zw + size * 0.5 - 0.5);
+}
+
+// Small kernels avoid shared-memory setup and synchronization overhead.
+float4 BlurPixel(int2 pixel, int2 axis)
+{
+    if (_Sigma <= 1e-6) return _Input.Load(int3(pixel, 0));
+    int radius = (int)ceil(3 * _Sigma);
+    float4 sum = 0;
+    float weightSum = 0;
+    [loop] for (int offset = -radius; offset <= radius; offset++)
+    {
+        float distance = offset / _Sigma;
+        float weight = exp(-0.5 * distance * distance);
+        sum += SamplingValue(pixel + axis * offset) * weight;
+        weightSum += weight;
+    }
+    return FinishSampling(sum / weightSum);
+}
+
+[numthreads(8, 8, 1)]
+void BlurHorizontal(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    _Output[id.xy] = BlurPixel(int2(id.xy), int2(1, 0));
+}
+
+[numthreads(8, 8, 1)]
+void BlurVertical(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    _Output[id.xy] = BlurPixel(int2(id.xy), int2(0, 1));
+}
+
+// A group covers 64 pixels along the sampling axis and reuses its halo and
+// Gaussian weights. The maximum radius is ceil(3 * 16) = 48.
+groupshared float4 BlurTile[160];
+groupshared float BlurWeights[97];
+
+void BlurTiled(uint3 group, uint3 thread, bool vertical)
+{
+    int2 axis = vertical ? int2(0, 1) : int2(1, 0);
+    int2 origin = int2(group.xy) * (vertical ? int2(1, 64) : int2(64, 1));
+    int2 pixel = origin + int2(thread.xy);
+    if (_Sigma <= 1e-6)
+    {
+        if (pixel.x < _Width && pixel.y < _Height) _Output[pixel] = _Input.Load(int3(pixel, 0));
+        return;
+    }
+    int radius = (int)ceil(3 * _Sigma);
+    int span = 64 + 2 * radius;
+    int lane = vertical ? (int)thread.y : (int)thread.x;
+    [loop] for (int index = lane; index < span; index += 64)
+    {
+        BlurTile[index] = SamplingValue(origin + axis * (index - radius));
+    }
+    [loop] for (int index = lane; index <= 2 * radius; index += 64)
+    {
+        float distance = (index - radius) / _Sigma;
+        BlurWeights[index] = exp(-0.5 * distance * distance);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    // Even threads outside odd-sized images must participate in the barrier.
+    if (pixel.x >= _Width || pixel.y >= _Height) return;
+    float4 sum = 0;
+    float weightSum = 0;
+    [loop] for (int index = 0; index <= 2 * radius; index++)
+    {
+        float weight = BlurWeights[index];
+        sum += BlurTile[lane + index] * weight;
+        weightSum += weight;
+    }
+    _Output[pixel] = FinishSampling(sum / weightSum);
+}
+
+[numthreads(64, 1, 1)]
+void BlurHorizontalTiled(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    BlurTiled(group, thread, false);
+}
+
+[numthreads(1, 64, 1)]
+void BlurVerticalTiled(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    BlurTiled(group, thread, true);
+}
+
+[numthreads(8, 8, 1)]
+void DirectionalWarpImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(_Width, _Height);
+    float amount = ReadBilinear(_IntensityMap, uv, false).r - _Warp.z;
+    _Output[id.xy] = SampleInput(float2(id.xy) - _Warp.xy * amount);
+}
+
+[numthreads(8, 8, 1)]
+void NormalImage(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
+    int2 p = int2(id.xy);
+    // Central differences per unit UV. +V runs upwards, OpenGL encodes +Y in green.
+    float dx = (ReadBorder(p + int2(1, 0)).r - ReadBorder(p - int2(1, 0)).r) * (0.5 * _Width);
+    float dy = (ReadBorder(p + int2(0, 1)).r - ReadBorder(p - int2(0, 1)).r) * (0.5 * _Height);
+    float3 normal = normalize(float3(-dx * _Strength, -dy * _Strength, 1));
+    if (_NormalFormat != 0) normal.y = -normal.y;
+    _Output[id.xy] = float4(normal * 0.5 + 0.5, _HeightInAlpha != 0 ? _Input.Load(int3(p, 0)).r : 1);
+}
