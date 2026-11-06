@@ -143,7 +143,22 @@ namespace Tsukuyomi.AiCanvas.Editor
 
     internal sealed class ImagePreviewAssetChanges : AssetPostprocessor
     {
+        internal static event Action SourceFilesChanged;
+
         private static void OnPostprocessAllAssets(string[] imported, string[] deleted, string[] moved, string[] movedFrom)
-            => ImageLocalPreview.AssetsChanged(imported.Concat(deleted).Concat(moved).Concat(movedFrom), deleted);
+        {
+            ImageLocalPreview.AssetsChanged(imported.Concat(deleted).Concat(moved).Concat(movedFrom), deleted);
+            if (SourceFilesChanged == null)
+                return;
+
+            // Reopen visible source images after the importer has finished updating the asset database.
+            EditorApplication.delayCall -= NotifySourceFilesChanged;
+            EditorApplication.delayCall += NotifySourceFilesChanged;
+        }
+
+        private static void NotifySourceFilesChanged()
+        {
+            EditorEvent.Invoke(SourceFilesChanged);
+        }
     }
 }

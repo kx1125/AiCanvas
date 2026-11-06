@@ -1,10 +1,10 @@
 {
   "name": "com.tsukuyomi.ai-canvas",
   "displayName": "AiCanvas",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "unity": "6000.5",
   "unityRelease": "3f1",
-  "description": "AiCanvas is a Graph Toolkit image generation and editing workflow for Unity Editor with GPT Image 2, reference images, masks, asynchronous execution, and persistent results.",
+  "description": "AiCanvas is a Graph Toolkit image generation and editing workflow for Unity Editor with selectable GPT image models, reference images, masks, asynchronous execution, and persistent results.",
   "keywords": ["aicanvas", "ai", "editor", "graph-toolkit", "image", "workflow"],
   "dependencies": {
     "com.unity.nuget.newtonsoft-json": "3.0.2",
@@ -14,9 +14,9 @@
     "com.unity.modules.imageconversion": "1.0.0",
     "com.unity.modules.jsonserialize": "1.0.0"
   },
-  "documentationUrl": "https://github.com/kx1125/AiCanvas/blob/v0.1.0/README.md",
-  "changelogUrl": "https://github.com/kx1125/AiCanvas/blob/v0.1.0/CHANGELOG.md",
-  "licensesUrl": "https://github.com/kx1125/AiCanvas/blob/v0.1.0/LICENSE.md",
+  "documentationUrl": "https://github.com/kx1125/AiCanvas/blob/v0.1.1/README.md",
+  "changelogUrl": "https://github.com/kx1125/AiCanvas/blob/v0.1.1/CHANGELOG.md",
+  "licensesUrl": "https://github.com/kx1125/AiCanvas/blob/v0.1.1/LICENSE.md",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -31,9 +31,9 @@ namespace Tsukuyomi.AiCanvas.Editor
                 var preset = (ImageSizePreset)size.intValue;
                 custom.style.display = preset == ImageSizePreset.Custom ? DisplayStyle.Flex : DisplayStyle.None;
                 hint.text = preset == ImageSizePreset.Auto ? "由图片服务根据提示词和输入图片决定输出尺寸。" :
-                    preset == ImageSizePreset.Custom ? "宽高须为 16 的倍数；超过 2560 × 1440 的尺寸为实验性支持。" :
+                    preset == ImageSizePreset.Custom ? "宽高须为 16 的倍数，可用尺寸取决于所用图像模型。" :
                     preset == ImageSizePreset.Landscape4K || preset == ImageSizePreset.Portrait4K || preset == ImageSizePreset.Square2K
-                        ? "该尺寸在 GPT Image 2 中为实验性支持。" : "";
+                        ? "请确认所用图像模型支持该尺寸。" : "";
             }
             root.TrackPropertyValue(size, _ => Refresh());
             Refresh();

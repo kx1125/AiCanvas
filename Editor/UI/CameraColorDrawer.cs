@@ -112,6 +112,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             var preview = new Image { name = "ai-canvas-camera-preview", scaleMode = ScaleMode.ScaleToFit,
                 pickingMode = PickingMode.Ignore };
             preview.style.height = 180;
+            var showPreview = ImageAssetPreview.BindThumbnail(preview);
             preview.style.backgroundColor = new Color(0.075f, 0.085f, 0.10f);
             var label = new Label { name = "ai-canvas-camera-caption" };
             label.style.whiteSpace = WhiteSpace.Normal;
@@ -125,7 +126,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             void Refresh()
             {
                 if (property.serializedObject.targetObject == null) return;
-                preview.image = texture.objectReferenceValue as Texture2D;
+                showPreview(texture.objectReferenceValue as Texture2D);
                 label.text = caption.stringValue;
             }
             root.TrackPropertyValue(texture, _ => Refresh());

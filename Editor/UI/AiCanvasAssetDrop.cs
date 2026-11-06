@@ -99,8 +99,9 @@ namespace Tsukuyomi.AiCanvas.Editor
                     var texture = textures[index];
                     var node = new ImageNode { Position = position + new Vector2(index % 3 * 380, index / 3 * 360) };
                     graph.AddNode(node);
+                    var size = new ImageSourcePixels(texture).Size;
                     GraphOptionAccess.Set(node, "Image",
-                        new ImageCard(texture, $"{texture.name} | {texture.width} x {texture.height}"));
+                        new ImageCard(texture, $"{texture.name} | {size.x} x {size.y}"));
                     nodes.Add(node);
                 }
             }

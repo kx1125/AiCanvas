@@ -39,6 +39,13 @@ namespace Tsukuyomi.AiCanvas.Editor
             ("affectAlpha", "Affect Alpha"));
     }
 
+    [CustomPropertyDrawer(typeof(HslSettings))]
+    public sealed class HslSettingsDrawer : PropertyDrawer
+    {
+        public override VisualElement CreatePropertyGUI(SerializedProperty property) => ImageFilterFields.Create(property,
+            ("hue", "Hue (°)"), ("saturation", "Saturation (%)"), ("lightness", "Lightness (%)"));
+    }
+
     [CustomPropertyDrawer(typeof(HistogramScanSettings))]
     public sealed class HistogramScanSettingsDrawer : PropertyDrawer
     {

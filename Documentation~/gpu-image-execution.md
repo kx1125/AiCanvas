@@ -16,6 +16,7 @@
 - `Color`：RGB 为线性颜色；源纹理的 sRGB 采样视图负责解码。没有 sRGB 视图但源数据为 sRGB 时，由导入 kernel 解码。导出 PNG 时将 RGB 编码为 sRGB。
 - `Data`：保留原始数值，适用于蒙版、通道数据等；导入和导出都不应用颜色传递函数。
 - Alpha 始终是数值，不做 Gamma 转换；默认使用非预乘 Alpha。涉及混合、模糊等操作的 kernel 必须显式实现自己的 Alpha 规则。
+- 图片文件从源文件按原生宽高解码。项目画质、平台 Max Size、纹理压缩和流式 mipmap 只影响 Unity 使用的导入贴图。节点缩略图、通道预览、滤镜、AI 输入和 Save 共用原生像素。没有独立源文件的纹理使用可取得的完整 mip 0；无法取得时会提示错误。
 - 导入根据源 `Texture2D.isDataSRGB` 判断 Color/Data。节点可以显式指定输出类型；`Inherit` 使用第一个输入的类型。
 - PNG 边界为 RGBA8，数值截断到 0–1。GPU 中间处理保留半精度范围；本层尚不提供 HDR 文件导出。
 - 全分辨率预览，无隐式降采样；单边最大为设备限制与 16384 的较小值。kernel 必须检查越界线程。设备须支持 ComputeShader 和格式的 Sample/LoadStore。异步读回不可用时仅在导出边界同步读回。

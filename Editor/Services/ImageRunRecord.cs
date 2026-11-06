@@ -15,12 +15,15 @@ namespace Tsukuyomi.AiCanvas.Editor
 
         internal static ImageRunRecord Create(ImageRequest request, string provider, string graph, string nodeId,
             string scope, string batchId, int index, string path, Texture2D texture)
-            => new ImageRunRecord
+        {
+            var outputSize = new ImageSourcePixels(texture).Size;
+            return new ImageRunRecord
             {
                 provider = provider, prompt = request.Prompt, taskPrompt = request.TaskPrompt, graph = graph,
                 nodeId = nodeId, scope = scope, batchId = batchId, outputIndex = index + 1,
                 size = request.Size, quality = request.Quality, count = request.Count,
-                width = texture.width, height = texture.height,
+                width = outputSize.x,
+                height = outputSize.y,
                 referencePath = request.References.FirstOrDefault()?.AssetPath ?? "",
                 referencePaths = request.References.Select(image => image.AssetPath).ToArray(),
                 maskPath = request.Mask?.AssetPath ?? "", outputPath = path, createdUtc = DateTime.UtcNow.ToString("O"),
@@ -31,6 +34,7 @@ namespace Tsukuyomi.AiCanvas.Editor
                     contentHash = input.Image.ContentHash
                 }).ToArray()
             };
+        }
 
         [Serializable]
         internal sealed class InputRecord

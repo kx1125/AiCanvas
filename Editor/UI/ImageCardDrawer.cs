@@ -31,6 +31,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             preview.style.height = 160;
             preview.style.backgroundColor = new Color(0.075f, 0.085f, 0.10f);
             preview.pickingMode = PickingMode.Ignore;
+            var showPreview = ImageAssetPreview.BindThumbnail(preview);
             var caption = new Label { name = "ai-canvas-caption" };
             caption.style.whiteSpace = WhiteSpace.Normal;
             caption.style.fontSize = 11;
@@ -62,7 +63,10 @@ namespace Tsukuyomi.AiCanvas.Editor
                 var texture = picker.value as Texture2D;
                 if (texture != null) ImagePreviewWindow.ShowTexture(texture);
             }) { text = "Preview" });
-            void UpdateImage(SerializedProperty value) { preview.image = value.objectReferenceValue as Texture2D; }
+            void UpdateImage(SerializedProperty value)
+            {
+                showPreview(value.objectReferenceValue as Texture2D);
+            }
             UpdateImage(textureProperty);
             caption.text = captionProperty.stringValue;
             root.TrackPropertyValue(textureProperty, UpdateImage);
@@ -75,12 +79,12 @@ namespace Tsukuyomi.AiCanvas.Editor
                     var gpu = ImagePreviewStore.Find(graph, PreviewKey(), out string error);
                     if (gpu != null)
                     {
-                        preview.image = gpu.Texture;
+                        showPreview(gpu.Texture);
                         caption.text = $"{gpu.Width} x {gpu.Height} | {gpu.Kind}" + (channel == null ? "" : " | " + choices[selectedOutput]);
                     }
                     else
                     {
-                        preview.image = error == null ? picker.value as Texture2D : null;
+                        showPreview(error == null ? picker.value as Texture2D : null);
                         caption.text = error ?? "等待本地预览";
                     }
                     preview.MarkDirtyRepaint();

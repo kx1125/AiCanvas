@@ -16,12 +16,22 @@ namespace Tsukuyomi.AiCanvas.Editor
     /// <summary>Images API adapter. Receives frozen PNGs and returns ordered PNG buffers.</summary>
     public sealed class OpenAIImageProvider : IImageProvider
     {
-        public const string Model = "gpt-image-2";
+        public const string DefaultModel = "gpt-image-2";
+        [Obsolete("Use DefaultModel for the default or ModelId for the configured image model.")]
+        public const string Model = DefaultModel;
         private static readonly HttpClient SharedClient = CreateClient();
         private readonly OpenAIImageOptions options;
-        public string Name => "OpenAI / " + Model;
+        public string ModelId => options.Model;
+        public string Name => "OpenAI / " + ModelId;
 
-        public OpenAIImageProvider() { options = OpenAIImageSettings.Capture(); }
+        public OpenAIImageProvider() : this(OpenAIImageSettings.Capture())
+        {
+        }
+
+        internal OpenAIImageProvider(OpenAIImageOptions options)
+        {
+            this.options = options;
+        }
 
         private static HttpClient CreateClient()
         {
@@ -48,21 +58,68 @@ namespace Tsukuyomi.AiCanvas.Editor
             timeout.CancelAfter(options.Timeout);
             using var message = new HttpRequestMessage(HttpMethod.Post,
                 new Uri(options.BaseUri, request.References.Count == 0 ? "images/generations" : "images/edits"));
-            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
             message.Content = BuildContent(request);
             try
             {
-                // Buffering is covered by the cancellation/timeout token as well as the upload.
-                using var response = await SharedClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, timeout.Token).ConfigureAwait(false);
-                string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                timeout.Token.ThrowIfCancellationRequested();
-                string requestId = response.Headers.TryGetValues("x-request-id", out var ids) ? ids.FirstOrDefault() : "";
-                if (!response.IsSuccessStatusCode) throw CreateApiError(response, body, requestId);
+                var (body, requestId) = await SendAsync(message, ModelId, timeout.Token).ConfigureAwait(false);
                 return DecodeResponse(body, request.Count, requestId, timeout.Token);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                throw new TimeoutException($"GPT Image 2 请求超过 {options.Timeout.TotalSeconds:0} 秒或连接超时。服务端可能仍在生成；本次未自动重试，请确认后再运行。");
+                throw new TimeoutException($"{ModelId} 请求超过 {options.Timeout.TotalSeconds:0} 秒或连接超时。服务端可能仍在生成；本次未自动重试，请确认后再运行。");
+            }
+        }
+
+        internal async Task<string[]> ListImageModelsAsync(CancellationToken token)
+        {
+            options.ValidateCredentials();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            using var message = new HttpRequestMessage(HttpMethod.Get, new Uri(options.BaseUri, "models"));
+            try
+            {
+                var (body, requestId) = await SendAsync(message, "模型列表", timeout.Token).ConfigureAwait(false);
+                ModelList list;
+                try
+                {
+                    list = JsonUtility.FromJson<ModelList>(body);
+                }
+                catch (ArgumentException)
+                {
+                    throw new InvalidOperationException("模型列表不是有效的 JSON。" + RequestIdSuffix(requestId));
+                }
+
+                if (list?.data == null)
+                    throw new InvalidOperationException("模型列表缺少 data 数组。" + RequestIdSuffix(requestId));
+
+                // /models also returns text and audio models, without output modality metadata.
+                return list.data.Select(entry => entry?.id)
+                    .Where(id => id != null && (id.StartsWith("gpt-image-", StringComparison.Ordinal) ||
+                        id.StartsWith("chatgpt-image-", StringComparison.Ordinal)))
+                    .Distinct(StringComparer.Ordinal)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToArray();
+            }
+            catch (OperationCanceledException) when (!token.IsCancellationRequested)
+            {
+                throw new TimeoutException("获取图像模型列表超时。");
+            }
+        }
+
+        private async Task<(string Body, string RequestId)> SendAsync(HttpRequestMessage message, string operation,
+            CancellationToken token)
+        {
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
+            try
+            {
+                using var response = await SharedClient.SendAsync(message, HttpCompletionOption.ResponseContentRead, token).ConfigureAwait(false);
+                string body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                string requestId = response.Headers.TryGetValues("x-request-id", out var ids) ? ids.FirstOrDefault() : "";
+                if (!response.IsSuccessStatusCode)
+                    throw CreateApiError(response, body, requestId, operation);
+
+                return (body, requestId);
             }
             catch (HttpRequestException)
             {
@@ -71,19 +128,19 @@ namespace Tsukuyomi.AiCanvas.Editor
             }
         }
 
-        private static HttpContent BuildContent(ImageRequest request)
+        private HttpContent BuildContent(ImageRequest request)
         {
             if (request.References.Count == 0)
                 return new StringContent(JsonUtility.ToJson(new GenerationBody
                 {
-                    model = Model, prompt = request.Prompt, size = request.Size,
+                    model = ModelId, prompt = request.Prompt, size = request.Size,
                     quality = request.Quality, n = request.Count, output_format = "png"
                 }), Encoding.UTF8, "application/json");
 
             var form = new MultipartFormDataContent();
             try
             {
-                form.Add(new StringContent(Model), "model");
+                form.Add(new StringContent(ModelId), "model");
                 form.Add(new StringContent(request.Prompt, Encoding.UTF8), "prompt");
                 form.Add(new StringContent(request.Size), "size");
                 form.Add(new StringContent(request.Quality), "quality");
@@ -92,7 +149,6 @@ namespace Tsukuyomi.AiCanvas.Editor
                 for (int index = 0; index < request.References.Count; index++)
                     AddPng(form, request.References[index], "image[]", "image_" + (index + 1) + ".png", 50 * 1024 * 1024);
                 if (request.Mask != null) AddPng(form, request.Mask, "mask", "mask.png", 4 * 1024 * 1024);
-                // GPT Image 2 always uses high input fidelity; input_fidelity and response_format are omitted.
                 return form;
             }
             catch { form.Dispose(); throw; }
@@ -132,9 +188,11 @@ namespace Tsukuyomi.AiCanvas.Editor
         }
 
         private Exception InvalidResponse(string detail, string requestId)
-            => new InvalidOperationException("GPT Image 2：" + detail + RequestIdSuffix(requestId));
+        {
+            return new InvalidOperationException(ModelId + "：" + detail + RequestIdSuffix(requestId));
+        }
 
-        private Exception CreateApiError(HttpResponseMessage response, string body, string requestId)
+        private Exception CreateApiError(HttpResponseMessage response, string body, string requestId, string operation)
         {
             ApiError error = null;
             try { error = JsonUtility.FromJson<ErrorResponse>(body)?.error; } catch (Exception) { }
@@ -148,7 +206,7 @@ namespace Tsukuyomi.AiCanvas.Editor
                 _ => "图片请求失败，请检查参数和服务地址。"
             };
             string retry = response.Headers.RetryAfter?.ToString();
-            return new InvalidOperationException($"GPT Image 2 HTTP {status}：{hint}" +
+            return new InvalidOperationException($"{operation} HTTP {status}：{hint}" +
                 (string.IsNullOrWhiteSpace(error?.message) ? "" : " " + Sanitize(error.message)) +
                 (string.IsNullOrWhiteSpace(retry) ? "" : " Retry-After: " + Sanitize(retry)) +
                 RequestIdSuffix(requestId));
@@ -172,6 +230,18 @@ namespace Tsukuyomi.AiCanvas.Editor
         }
 
         #pragma warning disable CS0649 // Populated by the API JSON response.
+        [Serializable]
+        private sealed class ModelList
+        {
+            public ModelEntry[] data;
+        }
+
+        [Serializable]
+        private sealed class ModelEntry
+        {
+            public string id;
+        }
+
         [Serializable] private sealed class ImageResponse { public ImageData[] data; }
         [Serializable] private sealed class ImageData { public string b64_json; }
         [Serializable] private sealed class ErrorResponse { public ApiError error; }

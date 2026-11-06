@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -22,6 +24,7 @@ namespace Tsukuyomi.AiCanvas.Editor
         internal static bool AccountChecked { get; private set; }
         internal static bool IsConnected => client != null && client.IsAlive;
         internal static bool ImageGenerationAvailable { get; private set; }
+        internal static string[] SessionModels { get; private set; } = Array.Empty<string>();
         internal static string AccountLabel { get; private set; } = "尚未检查";
         internal static string Status { get; private set; } = "等待连接";
         internal static string Error { get; private set; } = "";
@@ -48,6 +51,53 @@ namespace Tsukuyomi.AiCanvas.Editor
         });
 
         internal static void BeginConnect() => RunOperation(async token => { await ConnectAsync(token); });
+
+        internal static void BeginListModels()
+        {
+            RunOperation(async token =>
+            {
+                var rpc = await ConnectAsync(token);
+                if (!LoggedIn)
+                    throw new InvalidOperationException("请先登录 ChatGPT 账号。");
+
+                Status = "正在获取会话模型…";
+                EditorEvent.Invoke(Changed);
+                string account = AccountLabel;
+                var models = await ReadSessionModelsAsync(rpc, token);
+                if (!LoggedIn || AccountLabel != account)
+                    throw new InvalidOperationException("ChatGPT 账号已切换，请重新获取会话模型。");
+
+                SessionModels = models;
+                Status = $"已获取 {SessionModels.Length} 个会话模型";
+            });
+        }
+
+        private static async Task<string[]> ReadSessionModelsAsync(CodexRpcClient rpc, CancellationToken token)
+        {
+            var models = new SortedSet<string>(StringComparer.Ordinal);
+            var cursors = new HashSet<string>(StringComparer.Ordinal);
+            string cursor = null;
+            do
+            {
+                var page = await rpc.RequestAsync("model/list", new { cursor, includeHidden = false }, token);
+                if (!(page["data"] is JArray entries))
+                    throw new IOException("Codex 模型列表缺少 data 数组。");
+
+                foreach (var entry in entries)
+                {
+                    string model = (string)entry["model"];
+                    if (!string.IsNullOrWhiteSpace(model) && (bool?)entry["hidden"] != true)
+                        models.Add(model);
+                }
+
+                cursor = (string)page["nextCursor"];
+                if (!string.IsNullOrEmpty(cursor) && !cursors.Add(cursor))
+                    throw new IOException("Codex 模型列表返回了重复的分页标记。");
+            } while (!string.IsNullOrEmpty(cursor));
+
+            return models.ToArray();
+        }
+
         internal static void BeginUninstall() => RunOperation(token =>
         {
             Stop();
@@ -80,6 +130,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             var rpc = await ConnectAsync(token);
             if (LoginId != null) await CancelLoginAsync(rpc, token);
             await rpc.RequestAsync("account/logout", new { }, token);
+            SessionModels = Array.Empty<string>();
             LoggedIn = false;
             AccountChecked = true;
             AccountLabel = "未登录";
@@ -134,7 +185,11 @@ namespace Tsukuyomi.AiCanvas.Editor
             var account = (await rpc.RequestAsync("account/read", new { refreshToken = false }, token))["account"] as JObject;
             LoggedIn = (string)account?["type"] == "chatgpt";
             AccountChecked = true;
-            AccountLabel = LoggedIn ? ((string)account["email"] ?? "ChatGPT") + " · " + ((string)account["planType"] ?? "unknown") : "未登录";
+            string label = LoggedIn ? ((string)account["email"] ?? "ChatGPT") + " · " + ((string)account["planType"] ?? "unknown") : "未登录";
+            if (label != AccountLabel)
+                SessionModels = Array.Empty<string>();
+
+            AccountLabel = label;
         }
 
         private static async Task CancelLoginAsync(CodexRpcClient rpc, CancellationToken token)
@@ -153,6 +208,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             }
             else if (method == "account/updated" && data["authMode"]?.Type == JTokenType.Null)
             {
+                SessionModels = Array.Empty<string>();
                 LoggedIn = false; AccountChecked = true; AccountLabel = "未登录";
             }
             EditorEvent.Invoke(Changed);

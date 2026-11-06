@@ -18,7 +18,7 @@
 | ImageInputSnapshot | 保存独立 PNG、尺寸、Alpha、资源路径、版本与内容 Hash。 |
 | IImageProvider / IIncrementalImageProvider / ImageRequest | 以不可变请求提交图片；保留整批返回接口，并允许 Provider 按输出顺序逐张交付。 |
 | ImageBatchDelivery | 验证交付顺序和数量，将回调调度回编辑器线程，每张保存完成后再接收下一张。 |
-| OpenAIImageProvider | GPT Image 2 的 JSON/multipart 请求、超时、取消、错误处理与 PNG 解码。 |
+| OpenAIImageProvider | 读取 API Key 可见的图像模型，使用当前模型 ID 构造 JSON 或 multipart 请求，处理超时、取消、错误和 PNG 解码。 |
 | OpenAIImageSettings | 按项目保存连接配置，在主线程捕获请求所需的凭证与设置。 |
 | CodexRuntime | 固定版本下载、SHA-512 校验、受限解压、组件安装与路径边界。 |
 | CodexRpcClient | 后台 stdin/stdout JSON-RPC、请求分发、通知与进程树回收。 |

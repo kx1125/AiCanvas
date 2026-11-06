@@ -76,9 +76,12 @@ void RgbaSplitAll(uint3 id : SV_DispatchThreadID)
 
 float PickChannel(float4 a, float4 b, int channel)
 {
-    if (channel < 4) return a[channel];
-    if (channel < 8) return b[channel - 4];
-    return channel == 9 ? 1 : 0;
+    // A single initialized return value avoids FXC's partial-return warning.
+    float result = 0;
+    if (channel < 4) result = a[channel];
+    else if (channel < 8) result = b[channel - 4];
+    else if (channel == 9) result = 1;
+    return result;
 }
 
 [numthreads(8, 8, 1)]
@@ -137,7 +140,10 @@ float CellRandom(int2 cell, uint seed, uint stream)
     return (bits & 0x00ffffffu) / 16777216.0;
 }
 
-int2 WrapCell(int2 cell, int2 period) { return (cell % period + period) % period; }
+int2 WrapCell(int2 cell, int2 period)
+{
+    return int2(WrapImageIndex(cell.x, period.x), WrapImageIndex(cell.y, period.y));
+}
 
 float PeriodicValueNoise(float2 uv, int period, uint seed)
 {
@@ -184,8 +190,8 @@ void TileGeneratorImage(uint3 id : SV_DispatchThreadID)
     [unroll] for (int dy = -1; dy <= 1; dy++)
     {
         int row = baseRow + dy;
-        int wrappedRow = (row % period.y + period.y) % period.y;
-        float shift = (wrappedRow % 2) * _RowOffset;
+        int wrappedRow = WrapImageIndex(row, period.y);
+        float shift = ((uint)wrappedRow % 2u) * _RowOffset;
         int baseColumn = (int)floor(coordinate.x - shift);
         [unroll] for (int dx = -1; dx <= 1; dx++)
         {

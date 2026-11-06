@@ -36,8 +36,11 @@ namespace Tsukuyomi.AiCanvas.Editor
                     if (node is GenerateImageNode generate)
                         for (int index = 0; index < generate.Settings.OutputCount; index++)
                             if (results.TryGetValue(ExecutionPlan.ResultKey(id, index), out var generated))
+                            {
+                                var size = new ImageSourcePixels(generated).Size;
                                 GraphOptionAccess.Set(node, GenerateImageNode.ResultName(index), new ImageCard(generated,
-                                    $"Image {index + 1} | {providerName} | {generated.width} x {generated.height}"));
+                                    $"Image {index + 1} | {providerName} | {size.x} x {size.y}"));
+                            }
                     if (node is ImageOutputNode && plan.Outputs.TryGetValue(id, out var source))
                     {
                         Texture2D texture = source.Reference;

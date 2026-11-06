@@ -168,6 +168,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             string path = CapturePath(graph, node, folder);
             var camera = ResolveCamera(settings);
             var snapshot = Render(settings);
+            var size = new Vector2Int(snapshot.width, snapshot.height);
             Texture2D texture;
             try { texture = ImageAssetStore.SavePng(path, snapshot.EncodeToPNG()); }
             finally { Object.DestroyImmediate(snapshot); }
@@ -180,7 +181,7 @@ namespace Tsukuyomi.AiCanvas.Editor
                 {
                     texture = texture, settings = JsonUtility.ToJson(settings),
                     contentHash = AssetDatabase.GetAssetDependencyHash(path).ToString(),
-                    caption = $"{camera.name} | {texture.width} × {texture.height} | {DateTime.Now:HH:mm:ss.fff}"
+                    caption = $"{camera.name} | {size.x} × {size.y} | {DateTime.Now:HH:mm:ss.fff}"
                 });
                 foreach (var output in graph.GetNodes().OfType<ImageOutputNode>())
                     if (consumers.Any(port => port.GetStableId() == output.GetInputPortByName("Image").GetStableId()))

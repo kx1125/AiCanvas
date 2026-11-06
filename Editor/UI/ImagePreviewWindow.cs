@@ -14,6 +14,7 @@ namespace Tsukuyomi.AiCanvas.Editor
     {
         [SerializeField] private Texture2D texture;
         [SerializeField] private ImagePreviewChannel channel;
+        private readonly ImageAssetPreview assetPreview = new();
         private GpuImage gpu;
         private AiCanvasGraph previewGraph;
         private string previewNodeId;
@@ -25,7 +26,7 @@ namespace Tsukuyomi.AiCanvas.Editor
         private RenderTexture channelTexture;
         private bool isSaving;
 
-        private Texture Source => gpu?.Texture != null ? gpu.Texture : texture;
+        private Texture Source => gpu?.Texture != null ? gpu.Texture : assetPreview.Texture;
 
         internal ImagePreviewChannel Channel
         {
@@ -43,15 +44,24 @@ namespace Tsukuyomi.AiCanvas.Editor
         {
             ImageAssetStore.ImageImported += OnImageImported;
             ImagePreviewStore.Changed += OnPreviewChanged;
+            ImagePreviewAssetChanges.SourceFilesChanged += OnProjectChanged;
         }
         private void OnDisable()
         {
             ImageAssetStore.ImageImported -= OnImageImported;
             ImagePreviewStore.Changed -= OnPreviewChanged;
+            ImagePreviewAssetChanges.SourceFilesChanged -= OnProjectChanged;
             if (image != null) image.image = null;
             ReleaseChannelTexture();
             ReleaseGpu();
+            assetPreview.Dispose();
             previewGraph = null; previewNodeId = null;
+        }
+
+        private void OnProjectChanged()
+        {
+            if (texture != null || assetPreview.Texture != null || assetPreview.Error != null)
+                RefreshImage();
         }
         private void OnImageImported(Texture2D image)
         {
@@ -121,9 +131,10 @@ namespace Tsukuyomi.AiCanvas.Editor
 
         private void RefreshImage()
         {
+            assetPreview.Set(texture);
             Texture source = Source;
             Texture displayed = source;
-            string error = null;
+            string error = assetPreview.Error;
             if (previewGraph != null) ImagePreviewStore.Find(previewGraph, previewNodeId, out error);
             if (source != null && channel != ImagePreviewChannel.RGBA)
             {
@@ -178,7 +189,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             try
             {
                 // Freeze the original image before awaiting; channel display and later edits cannot affect the export.
-                using var lease = gpu?.Texture != null ? gpu.Retain() :
+                using var lease = gpu?.Retain() ?? assetPreview.Lease?.Retain() ??
                     ImageComputeDevice.Import(texture, ImageInputSnapshot.GetVersion(texture));
                 var png = await ImageComputeDevice.ReadPngAsync(lease, CancellationToken.None);
                 var path = ImageAssetStore.GeneratedPath(AiCanvasResourcePaths.Generated, Guid.NewGuid().ToString("N"), 0);

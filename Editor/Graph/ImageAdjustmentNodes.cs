@@ -19,6 +19,17 @@ namespace Tsukuyomi.AiCanvas.Editor
     public struct InvertSettings { public bool affectAlpha; }
 
     [Serializable]
+    public struct HslSettings
+    {
+        [Range(-180f, 180f), Tooltip("色相旋转角度。+120° 将红色转为绿色，−120° 转为蓝色。")]
+        public float hue;
+        [Range(-100f, 100f), Tooltip("饱和度。−100% 完全去色，+100% 将有色像素调至全饱和。")]
+        public float saturation;
+        [Range(-100f, 100f), Tooltip("HSL 明度。−100% 为黑，+100% 为白。")]
+        public float lightness;
+    }
+
+    [Serializable]
     public struct HistogramScanSettings
     {
         [Range(0, 1), Tooltip("增大 Position 扩大白色区域；0 为全黑，1 为全白。")]
@@ -67,6 +78,35 @@ namespace Tsukuyomi.AiCanvas.Editor
         public override ComputeImageOperation CreateOperation(ImageProcessingContext context)
             => new(ImageFilterShader.LoadMaterial(), "InvertImage", new[] { new ComputeImageInput("Input", "_Input") },
                 new[] { ComputeImageParameter.Int("_AffectAlpha", Settings.affectAlpha ? 1 : 0), ImageFilterShader.WorkingSpace(context) });
+        public override void OnEnable() { DefaultColor = new Color(0.78f, 0.65f, 0.32f); }
+    }
+
+    [Serializable]
+    [Node("Filters/Adjustment", "", "Hue Saturation Lightness (HSL)")]
+    public sealed class HslNode : ComputeImageNode
+    {
+        public HslSettings Settings => GraphOptionAccess.Read<HslSettings>(this, "HSL");
+
+        protected override void OnDefineImageInputs(IPortDefinitionContext context)
+            => context.AddInputPort<Texture2D>("Input").WithDisplayName("Image").Build();
+
+        protected override void OnDefineComputeOptions(IOptionDefinitionContext context)
+            => context.AddOption<HslSettings>("HSL").WithDefaultValue(default).Build();
+
+        public override ComputeImageOperation CreateOperation() => CreateOperation(default);
+
+        public override ComputeImageOperation CreateOperation(ImageProcessingContext context)
+        {
+            var settings = Settings;
+            ImageFilterShader.Range(settings.hue, -180f, 180f, "Hue");
+            ImageFilterShader.Range(settings.saturation, -100f, 100f, "Saturation");
+            ImageFilterShader.Range(settings.lightness, -100f, 100f, "Lightness");
+            var adjustment = new Vector4(settings.hue / 360f, settings.saturation / 100f, settings.lightness / 100f, 0f);
+            return new ComputeImageOperation(ImageFilterShader.LoadMaterial(), "AdjustHslImage",
+                new[] { new ComputeImageInput("Input", "_Input") },
+                new[] { ComputeImageParameter.Vector("_HslAdjustment", adjustment), ImageFilterShader.WorkingSpace(context) });
+        }
+
         public override void OnEnable() { DefaultColor = new Color(0.78f, 0.65f, 0.32f); }
     }
 

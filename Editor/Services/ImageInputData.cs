@@ -67,8 +67,11 @@ namespace Tsukuyomi.AiCanvas.Editor
         {
             if (mask == null) return;
             if (main == null) throw new InvalidOperationException("Mask 缺少 Main 图片。");
-            if (main.width != mask.width || main.height != mask.height)
-                throw new InvalidOperationException($"Mask 尺寸必须与 Main 相同：Main {main.width}×{main.height}，Mask {mask.width}×{mask.height}。");
+            var mainSize = new ImageSourcePixels(main).Size;
+            var maskSize = new ImageSourcePixels(mask).Size;
+            if (mainSize != maskSize)
+                throw new InvalidOperationException($"Mask 尺寸必须与 Main 相同：Main {mainSize.x}×{mainSize.y}，Mask {maskSize.x}×{maskSize.y}。");
+
             bool hasAlpha = ImageInputSnapshot.HasSourceAlpha(mask);
             if (!hasAlpha)
                 throw new InvalidOperationException("Mask 图片必须包含 Alpha 通道；黑白 RGB 图片需要先转换为 Alpha 蒙版。");

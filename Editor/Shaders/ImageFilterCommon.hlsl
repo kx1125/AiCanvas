@@ -2,6 +2,16 @@
 #define AICANVAS_IMAGE_FILTER_COMMON_INCLUDED
 int _WorkingSrgb;
 
+// Positive size: preserve signed-coordinate wrapping while using unsigned remainder.
+// Taking the magnitude in uint also handles the most negative int without overflow.
+int WrapImageIndex(int index, int size)
+{
+    uint modulus = (uint)size;
+    uint magnitude = index < 0 ? 0u - (uint)index : (uint)index;
+    uint remainder = magnitude % modulus;
+    return (int)(index < 0 && remainder != 0u ? modulus - remainder : remainder);
+}
+
 float4 Premultiply(float4 value) { return float4(value.rgb * value.a, value.a); }
 
 float3 WorkingEncodeSrgb(float3 value)

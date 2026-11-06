@@ -21,7 +21,7 @@ namespace Tsukuyomi.AiCanvas.Editor
             message.style.fontSize = 11;
             message.style.display = DisplayStyle.None;
             var button = new Button { name = "ai-canvas-run-node", text = "Run", userData = nodeId,
-                tooltip = "使用 GPT Image 2 生成当前节点（使用账号额度或 API 计费）；上游 AiGenerate 使用已有结果。" };
+                tooltip = "使用连接设置中的模型生成当前节点，上游 AiGenerate 使用已有结果。" };
             root.Add(button);
             root.Add(message);
             button.clicked += async () =>

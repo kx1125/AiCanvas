@@ -1,6 +1,6 @@
 # AiCanvas
 
-AiCanvas 是基于 Unity Graph Toolkit 的编辑器图片工作流插件，以 UPM 包管理，通过 GPT Image 2（`gpt-image-2`）生成和编辑图片。
+AiCanvas 是基于 Unity Graph Toolkit 的编辑器图片工作流插件，以 UPM 包管理。可以通过 OpenAI Images API 或 ChatGPT 账号生成和编辑图片。
 
 ## 环境与安装
 
@@ -11,7 +11,7 @@ AiCanvas 是基于 Unity Graph Toolkit 的编辑器图片工作流插件，以 U
 在 Unity 中打开 **Window > Package Management > Package Manager**，选择 **Install package from git URL**，输入：
 
 ```text
-https://github.com/kx1125/AiCanvas.git#v0.1.0
+https://github.com/kx1125/AiCanvas.git#v0.1.1
 ```
 
 也可以在项目的 `Packages/manifest.json` 中添加：
@@ -19,7 +19,7 @@ https://github.com/kx1125/AiCanvas.git#v0.1.0
 ```json
 {
   "dependencies": {
-    "com.tsukuyomi.ai-canvas": "https://github.com/kx1125/AiCanvas.git#v0.1.0"
+    "com.tsukuyomi.ai-canvas": "https://github.com/kx1125/AiCanvas.git#v0.1.1"
   }
 }
 ```
@@ -58,12 +58,14 @@ AiGenerate 自身的 Prompt 可留空：只要连接到 Inputs 的任意 Image I
 | Generators/Patterns | Shape、Tile Generator | 基础形状、平铺阵列、错行和随机变化。 |
 | Generators/Noises | Tileable Noise | 固定 Seed 的可平铺分形噪声。 |
 | Filters/Transform | Resize、Transform 2D、Directional Warp | 调整尺寸、平移/旋转/镜像/平铺，以及强度图驱动的定向变形。 |
-| Filters/Adjustment | Levels、Invert、Histogram Scan、Histogram Range、Histogram Select、Gradient Map | 色阶、反相、灰度范围与蒙版提取、多色标渐变映射。 |
+| Filters/Adjustment | Levels、Hue Saturation Lightness (HSL)、Invert、Histogram Scan、Histogram Range、Histogram Select、Gradient Map | 色阶、色相/饱和度/明度、反相、灰度范围与蒙版提取、多色标渐变映射。 |
 | Filters/Channels | Grayscale、RGBA Split、RGBA Merge、Channel Shuffle | 亮度提取、RGBA 四路拆分、数据通道打包与重排。 |
 | Filters/Blur | Gaussian Blur | 两遍可分离高斯模糊，支持平铺和透明边缘。 |
 | Filters/Normal | Normal | 高度图转切线空间法线，支持 OpenGL / DirectX。 |
 | Filters/Blending | Blend | 带蒙版的多图合成。 |
 | Outputs | Image Output | 接收并预览工作流结果。 |
+
+**Hue Saturation Lightness (HSL)** 提供三个以 0 为原点的滑条。Hue 在 −180° 到 +180° 之间旋转色相。Saturation 从 −100% 的全灰调到 +100% 的全饱和，灰色像素保持中性。Lightness 从 −100% 的黑色调到 +100% 的白色。三个值均为 0 时直接输出原图。调整时在图的工作空间内对 0–1 的 RGB 计算 HSL，保留输入尺寸和 Alpha。
 
 Image Input 将图片、提示词和 Main / Reference / Mask 角色组合成 AI 输入，因此归入 AI；通用图片源 Image 归入 Inputs。
 
@@ -101,6 +103,8 @@ Main 与 Reference 合计最多 16 张。Mask 必须配合 Main，尺寸相同�
 
 默认 Base URL 为 `https://api.openai.com/v1`。填写 Key 后点击 **Apply Settings**，或在启动 Unity 前配置 `OPENAI_API_KEY` 环境变量。会话 Key 优先，并按项目与服务地址隔离。
 
+在 **Tools > AiCanvas > Connection Settings** 点击 **获取可用图像模型**，从 **选择模型** 下拉框选择当前 Key 列出的 GPT 图像模型，也可以直接填写服务支持的图像模型 ID。点击 **Apply Settings** 后生效。默认 ID 为 `gpt-image-2`。文生图与带图编辑都使用所选 ID，结果 JSON 的 `provider` 记录此次请求使用的模型。
+
 API Key 存在 Unity SessionState 中，可跨脚本重载保留，退出 Unity 后清除。Base URL、连接方式和超时等非敏感设置使用 EditorPrefs。凭证不进入图、包或结果 JSON。
 
 无图片时请求 `/images/generations`；有主图或参考图时请求 `/images/edits`。支持独立 Mask、尺寸、质量及批量 PNG 结果。兼容服务地址须支持对应的 Images API。
@@ -108,6 +112,8 @@ API Key 存在 Unity SessionState 中，可跨脚本重载保留，退出 Unity 
 ### ChatGPT 账号
 
 在 Connection Settings 选择 ChatGPT 账号模式，点击 **安装运行组件并连接**；已有组件可点击 **重新下载并修复组件**。组件就绪后使用浏览器登录或设备码登录。插件管理固定版本的官方 Codex 原生组件，无需单独安装 Node.js、CLI 或桌面应用。
+
+登录后点击 **获取账号可用会话模型**，在 **Codex 会话模型** 中选择，或保留 **账号默认**。会话模型负责调用内置图像工具，底层绘图模型由 ChatGPT 服务决定。要指定绘图模型 ID，请使用 API Key 模式。
 
 账号模式支持文生图、主图编辑、参考图和逐张生成多个结果。尺寸与质量作为生成要求传递，实际输出由服务决定；精确 Alpha Mask 编辑需要使用 API Key 模式。
 

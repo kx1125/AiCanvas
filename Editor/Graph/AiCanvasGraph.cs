@@ -177,7 +177,7 @@ namespace Tsukuyomi.AiCanvas.Editor
         {
             DefaultColor = new Color(0.93f, 0.60f, 0.37f);
             if (Title == "Generate / Edit" || Title == "Generate") Title = "AiGenerate";
-            Subtitle = "GPT Image 2";
+            Subtitle = "Image Generation";
         }
     }
 

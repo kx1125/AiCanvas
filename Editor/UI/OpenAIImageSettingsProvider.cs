@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
@@ -13,19 +14,18 @@ namespace Tsukuyomi.AiCanvas.Editor
         [SettingsProvider]
         internal static SettingsProvider Create()
         {
-            string keyDraft = "";
-            string baseUrl = OpenAIImageSettings.BaseUrl;
-            int timeout = OpenAIImageSettings.TimeoutSeconds;
-            string error = "";
+            ApiConnectionForm api = null;
             return new SettingsProvider(OpenAIImageSettings.PreferencesPath, SettingsScope.User)
             {
                 label = "AiCanvas",
-                keywords = new HashSet<string> { "OpenAI", "GPT", "Image", "API", "Key", "ChatGPT", "Codex", "登录", "运行组件" },
-                activateHandler = (_, __) => CodexConnection.Changed += RepaintSettings,
+                keywords = new HashSet<string> { "OpenAI", "GPT", "Image", "API", "Key", "Model", "ChatGPT", "Codex", "模型", "登录", "运行组件" },
+                activateHandler = (_, __) =>
+                {
+                    api = new ApiConnectionForm();
+                    CodexConnection.Changed += RepaintSettings;
+                },
                 guiHandler = _ =>
                 {
-                    EditorGUILayout.LabelField("GPT Image 2", EditorStyles.boldLabel);
-                    EditorGUILayout.LabelField("Model", OpenAIImageProvider.Model);
                     using (new EditorGUI.DisabledScope(ImageGraphRunner.IsRunning || CodexConnection.Busy))
                     {
                         var mode = (ImageConnectionMode)EditorGUILayout.Popup("连接方式", (int)OpenAIImageSettings.ConnectionMode,
@@ -33,50 +33,151 @@ namespace Tsukuyomi.AiCanvas.Editor
                         if (mode != OpenAIImageSettings.ConnectionMode)
                         {
                             OpenAIImageSettings.ConnectionMode = mode;
-                            keyDraft = "";
-                            if (mode == ImageConnectionMode.ApiKey) CodexConnection.Stop();
+                            api.Close();
+                            api = new ApiConnectionForm();
+                            if (mode == ImageConnectionMode.ApiKey)
+                                CodexConnection.Stop();
                         }
                     }
                     if (OpenAIImageSettings.ConnectionMode == ImageConnectionMode.ChatGpt)
-                    {
                         DrawAccount();
-                        return;
-                    }
-                    EditorGUILayout.HelpBox("Run 会向配置的服务提交提示词和输入图片，并产生 API 费用。API Key 仅保存在当前 Unity 会话中；重启后需重新填写，或使用 OPENAI_API_KEY 环境变量。", MessageType.Info);
-                    using (new EditorGUI.DisabledScope(ImageGraphRunner.IsRunning))
-                    {
-                        baseUrl = EditorGUILayout.TextField("Base URL", baseUrl);
-                        timeout = EditorGUILayout.IntField("Timeout (seconds)", timeout);
-                        keyDraft = EditorGUILayout.PasswordField("API Key", keyDraft);
-                        EditorGUILayout.LabelField("Credential", OpenAIImageSettings.HasSessionKey ? "Session key configured" :
-                            OpenAIImageSettings.HasEnvironmentKey ? "OPENAI_API_KEY configured" : "Not configured");
-                        if (GUILayout.Button("Apply Settings"))
-                        {
-                            try
-                            {
-                                var options = new OpenAIImageOptions(keyDraft, baseUrl, TimeSpan.FromSeconds(Mathf.Clamp(timeout, 30, 1800)));
-                                if (!string.IsNullOrWhiteSpace(keyDraft)) options.ValidateCredentials();
-                                OpenAIImageSettings.BaseUrl = baseUrl;
-                                OpenAIImageSettings.TimeoutSeconds = timeout;
-                                if (!string.IsNullOrWhiteSpace(keyDraft)) OpenAIImageSettings.SetSessionKey(keyDraft);
-                                keyDraft = "";
-                                baseUrl = OpenAIImageSettings.BaseUrl;
-                                timeout = OpenAIImageSettings.TimeoutSeconds;
-                                error = "";
-                            }
-                            catch (Exception exception) { error = exception.Message; }
-                        }
-                        if (GUILayout.Button("Clear Session Key"))
-                        {
-                            OpenAIImageSettings.ClearSessionKey();
-                            keyDraft = "";
-                        }
-                    }
-                    if (!string.IsNullOrEmpty(error)) EditorGUILayout.HelpBox(error, MessageType.Error);
-                    EditorGUILayout.HelpBox("默认地址：https://api.openai.com/v1。兼容服务需同时支持 Images 生成与编辑接口。超时范围 30–1800 秒；失败或超时后不会自动重试。", MessageType.None);
+                    else
+                        api.Draw();
                 },
-                deactivateHandler = () => { keyDraft = ""; CodexConnection.Changed -= RepaintSettings; }
+                deactivateHandler = () =>
+                {
+                    api?.Close();
+                    CodexConnection.Changed -= RepaintSettings;
+                }
             };
+        }
+
+        private sealed class ApiConnectionForm
+        {
+            private string keyDraft = "";
+            private string baseUrl = OpenAIImageSettings.BaseUrl;
+            private string model = OpenAIImageSettings.ApiModel;
+            private int timeout = OpenAIImageSettings.TimeoutSeconds;
+            private string error = "";
+            private string[] availableModels;
+            private CancellationTokenSource lookup;
+
+            internal void Close()
+            {
+                lookup?.Cancel();
+                keyDraft = "";
+            }
+
+            internal void Draw()
+            {
+                EditorGUILayout.HelpBox("Run 会向配置的服务提交提示词和输入图片，并产生 API 费用。API Key 仅保存在当前 Unity 会话中；重启后需重新填写，或使用 OPENAI_API_KEY 环境变量。", MessageType.Info);
+                using (new EditorGUI.DisabledScope(ImageGraphRunner.IsRunning || lookup != null))
+                {
+                    baseUrl = EditorGUILayout.TextField("Base URL", baseUrl);
+                    keyDraft = EditorGUILayout.PasswordField("API Key", keyDraft);
+                    bool hasKey = OpenAIImageSettings.HasSessionKey || OpenAIImageSettings.HasEnvironmentKey;
+                    bool credentialsChanged = baseUrl.Trim().TrimEnd('/') != OpenAIImageSettings.BaseUrl ||
+                        !string.IsNullOrWhiteSpace(keyDraft);
+                    EditorGUILayout.LabelField("Credential", OpenAIImageSettings.HasSessionKey ? "Session key configured" :
+                        OpenAIImageSettings.HasEnvironmentKey ? "OPENAI_API_KEY configured" : "Not configured");
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        model = EditorGUILayout.TextField("图像模型 ID", model);
+                        using (new EditorGUI.DisabledScope(credentialsChanged || availableModels == null || availableModels.Length == 0))
+                        {
+                            if (GUILayout.Button("选择模型", EditorStyles.popup, GUILayout.Width(100)))
+                                ShowModelMenu(availableModels, model, value => model = value);
+                        }
+                    }
+                    using (new EditorGUI.DisabledScope(credentialsChanged || !hasKey))
+                    {
+                        if (GUILayout.Button(lookup == null ? "获取可用图像模型" : "正在获取图像模型…"))
+                            RefreshModels();
+                    }
+                    if (credentialsChanged || !hasKey)
+                        EditorGUILayout.HelpBox("保存服务地址和凭证后即可获取该 Key 的图像模型。", MessageType.None);
+                    else if (availableModels?.Length == 0)
+                        EditorGUILayout.HelpBox("服务没有列出 GPT 图像模型。也可以手动填写服务支持的图像模型 ID。", MessageType.Info);
+
+                    timeout = EditorGUILayout.IntField("Timeout (seconds)", timeout);
+                    if (GUILayout.Button("Apply Settings"))
+                    {
+                        try
+                        {
+                            var options = new OpenAIImageOptions(keyDraft, baseUrl, TimeSpan.FromSeconds(Mathf.Clamp(timeout, 30, 1800)), model);
+                            if (!string.IsNullOrWhiteSpace(keyDraft))
+                                options.ValidateCredentials();
+
+                            OpenAIImageSettings.BaseUrl = baseUrl;
+                            OpenAIImageSettings.ApiModel = options.Model;
+                            OpenAIImageSettings.TimeoutSeconds = timeout;
+                            if (!string.IsNullOrWhiteSpace(keyDraft))
+                                OpenAIImageSettings.SetSessionKey(keyDraft);
+                            if (credentialsChanged)
+                                availableModels = null;
+
+                            keyDraft = "";
+                            baseUrl = OpenAIImageSettings.BaseUrl;
+                            model = options.Model;
+                            timeout = OpenAIImageSettings.TimeoutSeconds;
+                            error = "";
+                        }
+                        catch (Exception exception)
+                        {
+                            error = exception.Message;
+                        }
+                    }
+                    if (GUILayout.Button("Clear Session Key"))
+                    {
+                        OpenAIImageSettings.ClearSessionKey();
+                        keyDraft = "";
+                        availableModels = null;
+                        error = "";
+                    }
+                }
+                if (!string.IsNullOrEmpty(error))
+                    EditorGUILayout.HelpBox(error, MessageType.Error);
+                EditorGUILayout.HelpBox("默认地址：https://api.openai.com/v1。兼容服务需同时支持 Images 生成与编辑接口。超时范围 30–1800 秒；失败或超时后不会自动重试。", MessageType.None);
+            }
+
+            private async void RefreshModels()
+            {
+                using var request = new CancellationTokenSource();
+                lookup = request;
+                availableModels = null;
+                error = "";
+                try
+                {
+                    var models = await new OpenAIImageProvider().ListImageModelsAsync(request.Token);
+                    if (!request.IsCancellationRequested)
+                        availableModels = models;
+                }
+                catch (OperationCanceledException) when (request.IsCancellationRequested)
+                {
+                    // Closing the form cancels an in-flight catalog request.
+                }
+                catch (Exception exception)
+                {
+                    error = exception.Message;
+                }
+                finally
+                {
+                    lookup = null;
+                    if (!request.IsCancellationRequested)
+                        RepaintSettings();
+                }
+            }
+        }
+
+        private static void ShowModelMenu(string[] models, string current, Action<string> select, string defaultLabel = null)
+        {
+            var menu = new GenericMenu();
+            if (defaultLabel != null)
+                menu.AddItem(new GUIContent(defaultLabel), string.IsNullOrEmpty(current), () => select(""));
+            foreach (string model in models)
+                menu.AddItem(new GUIContent(model), model == current, () => select(model));
+
+            menu.ShowAsContext();
         }
 
         private static void DrawAccount()
@@ -92,6 +193,19 @@ namespace Tsukuyomi.AiCanvas.Editor
             {
                 int seconds = EditorGUILayout.IntField("超时（秒）", OpenAIImageSettings.TimeoutSeconds);
                 if (seconds != OpenAIImageSettings.TimeoutSeconds) OpenAIImageSettings.TimeoutSeconds = seconds;
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.PrefixLabel("Codex 会话模型");
+                    string model = OpenAIImageSettings.CodexModel;
+                    if (GUILayout.Button(string.IsNullOrEmpty(model) ? "账号默认" : model, EditorStyles.popup))
+                        ShowModelMenu(CodexConnection.SessionModels, model, value => OpenAIImageSettings.CodexModel = value, "账号默认");
+                }
+                using (new EditorGUI.DisabledScope(!installed || !CodexConnection.LoggedIn || CodexConnection.LoginId != null))
+                {
+                    if (GUILayout.Button("获取账号可用会话模型"))
+                        CodexConnection.BeginListModels();
+                }
+                EditorGUILayout.HelpBox("所选会话模型负责调用 Codex 内置图像工具。具体绘图模型由账号服务决定；指定绘图模型请使用 API Key。", MessageType.None);
                 if (GUILayout.Button(installed ? "重新下载并修复组件" : "安装运行组件并连接")) CodexConnection.BeginInstall();
                 using (new EditorGUI.DisabledScope(!installed))
                 {

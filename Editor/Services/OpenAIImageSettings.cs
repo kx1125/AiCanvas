@@ -29,6 +29,27 @@ namespace Tsukuyomi.AiCanvas.Editor
             set { EditorPrefs.SetString(Prefix + "BaseUrl", OpenAIImageOptions.NormalizeBaseUrl(value).AbsoluteUri.TrimEnd('/')); EditorEvent.Invoke(Changed); }
         }
 
+        internal static string ApiModel
+        {
+            get => EditorPrefs.GetString(Prefix + "ApiModel", OpenAIImageProvider.DefaultModel);
+            set
+            {
+                EditorPrefs.SetString(Prefix + "ApiModel", OpenAIImageOptions.NormalizeModel(value));
+                EditorEvent.Invoke(Changed);
+            }
+        }
+
+        // An empty value lets the signed-in Codex account choose its default session model.
+        internal static string CodexModel
+        {
+            get => EditorPrefs.GetString(Prefix + "CodexModel", "");
+            set
+            {
+                EditorPrefs.SetString(Prefix + "CodexModel", value);
+                EditorEvent.Invoke(Changed);
+            }
+        }
+
         internal static int TimeoutSeconds
         {
             get => Mathf.Clamp(EditorPrefs.GetInt(Prefix + "TimeoutSeconds", 600), 30, 1800);
@@ -52,7 +73,7 @@ namespace Tsukuyomi.AiCanvas.Editor
         {
             string key = SessionState.GetString(CredentialKey, "");
             if (string.IsNullOrWhiteSpace(key)) key = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-            var options = new OpenAIImageOptions(key, BaseUrl, TimeSpan.FromSeconds(TimeoutSeconds));
+            var options = new OpenAIImageOptions(key, BaseUrl, TimeSpan.FromSeconds(TimeoutSeconds), ApiModel);
             options.ValidateCredentials();
             return options;
         }
@@ -63,11 +84,13 @@ namespace Tsukuyomi.AiCanvas.Editor
         internal string ApiKey { get; }
         internal Uri BaseUri { get; }
         internal TimeSpan Timeout { get; }
+        internal string Model { get; }
 
-        internal OpenAIImageOptions(string apiKey, string baseUrl, TimeSpan timeout)
+        internal OpenAIImageOptions(string apiKey, string baseUrl, TimeSpan timeout, string model)
         {
             ApiKey = (apiKey ?? "").Trim();
             BaseUri = NormalizeBaseUrl(baseUrl);
+            Model = NormalizeModel(model);
             if (timeout <= TimeSpan.Zero || timeout.TotalMilliseconds > int.MaxValue)
                 throw new ArgumentOutOfRangeException(nameof(timeout));
             Timeout = timeout;
@@ -89,6 +112,19 @@ namespace Tsukuyomi.AiCanvas.Editor
                 !string.IsNullOrEmpty(uri.UserInfo) || !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment))
                 throw new InvalidOperationException("Base URL 必须为 HTTPS API 根地址（通常以 /v1 结尾），不能含凭证、查询参数或片段。本机调试可使用 HTTP。");
             return uri;
+        }
+
+        internal static string NormalizeModel(string value)
+        {
+            string model = value?.Trim();
+            if (string.IsNullOrEmpty(model))
+                throw new InvalidOperationException("请输入图像模型 ID，或从可用模型中选择。");
+
+            foreach (char character in model)
+                if (char.IsWhiteSpace(character) || char.IsControl(character))
+                    throw new InvalidOperationException("图像模型 ID 不能包含空白或控制字符。");
+
+            return model;
         }
     }
 }

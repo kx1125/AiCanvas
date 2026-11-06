@@ -39,13 +39,19 @@ namespace Tsukuyomi.AiCanvas.Editor
             GpuImage.ReleaseAll();
         }
 
+        internal static void ValidateDimensions(int width, int height)
+        {
+            int maxSize = Math.Min(16384, SystemInfo.maxTextureSize);
+            if (width < 1 || height < 1 || width > maxSize || height > maxSize)
+                throw new ArgumentOutOfRangeException(nameof(width), $"Unsupported image dimensions: {width} x {height}.");
+        }
+
         internal static RenderTexture Allocate(int width, int height, GraphicsFormat format = GraphicsFormat.R16G16B16A16_SFloat)
         {
             if (!SystemInfo.supportsComputeShaders)
                 throw new NotSupportedException("AiCanvas local image processing requires ComputeShader support.");
-            int maxSize = Math.Min(16384, SystemInfo.maxTextureSize);
-            if (width < 1 || height < 1 || width > maxSize || height > maxSize)
-                throw new ArgumentOutOfRangeException(nameof(width), $"Unsupported image dimensions: {width} x {height}.");
+
+            ValidateDimensions(width, height);
             if (!SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.LoadStore) ||
                 !SystemInfo.IsFormatSupported(format, GraphicsFormatUsage.Sample))
                 throw new NotSupportedException("GPU does not support the required image format: " + format);
@@ -70,25 +76,48 @@ namespace Tsukuyomi.AiCanvas.Editor
 
         internal static GpuImage Import(Texture2D texture, string version)
         {
-            if (texture == null) throw new ArgumentNullException(nameof(texture));
-            string key = Hash128.Compute("import-v1|" + version + "|" + texture.width + "|" + texture.height + "|" + texture.isDataSRGB +
-                "|" + ImageAssetQueryScope.DependencyHash(TransferPath)).ToString();
-            if (Cache.TryGet(key, out var cached)) return cached;
+            if (texture == null)
+                throw new ArgumentNullException(nameof(texture));
+
+            return ImportSource(texture, version, new ImageSourcePixels(texture));
+        }
+
+        internal static GpuImage ImportSource(Texture2D texture, string version, ImageSourcePixels source)
+        {
+            var size = source.Size;
+            string key = Hash128.Compute($"native-import|{version}|{size.x}|{size.y}|{texture.isDataSRGB}|" +
+                ImageAssetQueryScope.DependencyHash(TransferPath)).ToString();
+            if (Cache.TryGet(key, out var cached))
+                return cached;
+
             var kind = texture.isDataSRGB ? ImageValueKind.Color : ImageValueKind.Data;
-            var target = Allocate(texture.width, texture.height);
+            var target = Allocate(size.x, size.y);
+            Texture2D copy = null;
             try
             {
+                copy = source.CreateCopy();
+                var pixels = copy != null ? copy : texture;
                 var shader = Transfer;
                 int kernel = shader.FindKernel("ImportImage");
-                shader.SetTexture(kernel, "_Input", texture);
-                // An sRGB SRV already decodes on texture Load. Gamma projects may expose a UNorm SRV.
-                shader.SetInt("_DecodeSrgb", texture.isDataSRGB && !GraphicsFormatUtility.IsSRGBFormat(texture.graphicsFormat) ? 1 : 0);
+                shader.SetTexture(kernel, "_Input", pixels);
+                shader.SetInt("_DecodeSrgb", texture.isDataSRGB && !GraphicsFormatUtility.IsSRGBFormat(pixels.graphicsFormat) ? 1 : 0);
                 Dispatch(shader, kernel, target);
+                target.name = texture.name;
                 var image = new GpuImage(target, key, kind, ImageInputSnapshot.HasSourceAlpha(texture));
                 Cache.Add(key, image);
                 return image;
             }
-            catch { target.Release(); UnityEngine.Object.DestroyImmediate(target); throw; }
+            catch
+            {
+                target.Release();
+                UnityEngine.Object.DestroyImmediate(target);
+                throw;
+            }
+            finally
+            {
+                if (copy != null)
+                    UnityEngine.Object.DestroyImmediate(copy);
+            }
         }
 
         internal static GpuImage Execute(ComputeImageOperation operation, IReadOnlyList<GpuImage> inputs)

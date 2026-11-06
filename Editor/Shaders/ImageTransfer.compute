@@ -3,6 +3,7 @@
 #pragma kernel PreviewChannel
 
 Texture2D<float4> _Input;
+SamplerState AiCanvas_point_clamp_sampler;
 RWTexture2D<float4> _Output;
 int _Width;
 int _Height;
@@ -21,13 +22,21 @@ float3 EncodeSrgb(float3 value)
     return lerp(value * 12.92, 1.055 * pow(value, 1.0 / 2.4) - 0.055, step(0.0031308, value));
 }
 
+float4 ReadSourcePixel(uint2 pixel)
+{
+    // The source's resident mip can be smaller than the logical output. Sample its
+    // full extent at output pixel centers, without mixing adjacent mask/channel values.
+    float2 uv = (float2(pixel) + 0.5) / float2(_Width, _Height);
+    float4 value = _Input.SampleLevel(AiCanvas_point_clamp_sampler, uv, 0);
+    if (_DecodeSrgb != 0) value.rgb = DecodeSrgb(value.rgb);
+    return value;
+}
+
 [numthreads(8, 8, 1)]
 void ImportImage(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
-    float4 value = _Input.Load(int3(id.xy, 0));
-    if (_DecodeSrgb != 0) value.rgb = DecodeSrgb(value.rgb);
-    _Output[id.xy] = value;
+    _Output[id.xy] = ReadSourcePixel(id.xy);
 }
 
 [numthreads(8, 8, 1)]
@@ -43,8 +52,7 @@ void EncodeImage(uint3 id : SV_DispatchThreadID)
 void PreviewChannel(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= (uint)_Width || id.y >= (uint)_Height) return;
-    float4 value = _Input.Load(int3(id.xy, 0));
-    if (_DecodeSrgb != 0) value.rgb = DecodeSrgb(value.rgb);
+    float4 value = ReadSourcePixel(id.xy);
     float gray = value[_PreviewChannel];
     // Single channels are opaque so RGB remains inspectable even where the source alpha is zero.
     _Output[id.xy] = float4(gray, gray, gray, 1.0);

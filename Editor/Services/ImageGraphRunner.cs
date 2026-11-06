@@ -14,7 +14,7 @@ namespace Tsukuyomi.AiCanvas.Editor
         private static CancellationTokenSource activeCancellation;
         public static bool IsRunning => activeCancellation != null;
         public static string ActiveNodeId { get; private set; }
-        public static string Status { get; private set; } = "Ready - GPT Image 2";
+        public static string Status { get; private set; } = "Ready";
         internal static string StatusGraphGuid { get; private set; }
         public static IReadOnlyList<string> LastSavedFiles { get; private set; } = Array.Empty<string>();
         public static event Action StateChanged;
